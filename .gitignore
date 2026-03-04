@@ -1,0 +1,41 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# Go build artifacts
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+coverage.out
+cover.out
+
+./output
+# Project-local binaries
+gpu-task-exporter
+bm-gpu-task-exporter
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Dependency/vendor and module cache (optional in VCS)
+vendor/
+
+# IDE/editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
