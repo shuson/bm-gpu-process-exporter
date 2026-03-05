@@ -24,12 +24,23 @@ func main() {
 	updateEvery := flag.Int("update-interval-seconds", getEnvAsInt("UPDATE_INTERVAL_SECONDS", 5), "Metric refresh interval in seconds")
 	flag.Parse()
 
+	// 获取本机主机名，支持通过 HOSTNAME_OVERRIDE 环境变量覆盖（适用于容器化部署）
+	hostname := getEnv("HOSTNAME_OVERRIDE", "")
+	if hostname == "" {
+		var err error
+		hostname, err = os.Hostname()
+		if err != nil {
+			log.Printf("warning: failed to get hostname: %v, using 'unknown'", err)
+			hostname = "unknown"
+		}
+	}
+
 	gpuProcessInfo := promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "gpu_process_info",
 			Help: "Metadata for active GPU processes. Always 1 while process is active.",
 		},
-		[]string{"gpu", "pid", "user", "program"},
+		[]string{"hostname", "gpu", "uuid", "pid", "user", "program"},
 	)
 
 	gpuProcessMemoryUsedMB := promauto.NewGaugeVec(
@@ -37,7 +48,7 @@ func main() {
 			Name: "gpu_process_memory_used_megabytes",
 			Help: "GPU memory used by process in MiB.",
 		},
-		[]string{"gpu", "pid", "user", "program"},
+		[]string{"hostname", "gpu", "uuid", "pid", "user", "program"},
 	)
 
 	gpuProcessUtilization := promauto.NewGaugeVec(
@@ -45,7 +56,7 @@ func main() {
 			Name: "gpu_process_utilization_percent",
 			Help: "Estimated GPU utilization percentage per active GPU process.",
 		},
-		[]string{"gpu", "pid", "user", "program"},
+		[]string{"hostname", "gpu", "uuid", "pid", "user", "program"},
 	)
 
 	exporterUpdates := promauto.NewCounter(
@@ -74,7 +85,7 @@ func main() {
 		defer ticker.Stop()
 
 		for {
-			if err := updateFromNvidiaSMI(gpuProcessInfo, gpuProcessMemoryUsedMB, gpuProcessUtilization); err != nil {
+			if err := updateFromNvidiaSMI(gpuProcessInfo, gpuProcessMemoryUsedMB, gpuProcessUtilization, hostname); err != nil {
 				nvidiaSMIUp.Set(0)
 				exporterUpdateErrors.Inc()
 				log.Printf("nvidia-smi update failed: %v", err)
@@ -120,6 +131,7 @@ func updateFromNvidiaSMI(
 	gpuProcessInfo *prometheus.GaugeVec,
 	gpuProcessMemoryUsedMB *prometheus.GaugeVec,
 	gpuProcessUtilization *prometheus.GaugeVec,
+	hostname string,
 ) error {
 	cmd := exec.Command(
 		"nvidia-smi",
@@ -154,7 +166,7 @@ func updateFromNvidiaSMI(
 		gpuUtilByIndex[gpuIndex] = utilGPU
 	}
 
-	if err := updateGPUProcesses(gpuProcessInfo, gpuProcessMemoryUsedMB, gpuProcessUtilization, gpuUtilByIndex); err != nil {
+	if err := updateGPUProcesses(gpuProcessInfo, gpuProcessMemoryUsedMB, gpuProcessUtilization, gpuUtilByIndex, hostname); err != nil {
 		return err
 	}
 
@@ -164,10 +176,17 @@ func updateFromNvidiaSMI(
 func updateGPUProcesses(
 	gpuProcessInfo, gpuProcessMemoryUsedMB, gpuProcessUtilization *prometheus.GaugeVec,
 	gpuUtilByIndex map[string]float64,
+	hostname string,
 ) error {
 	uuidToIndex, err := getUUIDToIndexMap()
 	if err != nil {
 		return err
+	}
+
+	// 构造反向映射：GPU 索引 → UUID
+	indexToUUID := make(map[string]string, len(uuidToIndex))
+	for uuid, index := range uuidToIndex {
+		indexToUUID[index] = uuid
 	}
 
 	cmd := exec.Command(
@@ -193,6 +212,7 @@ func updateGPUProcesses(
 	processCountByGPU := make(map[string]int)
 	type processSample struct {
 		gpuIndex string
+		uuid     string
 		pid      string
 		user     string
 		program  string
@@ -216,6 +236,7 @@ func updateGPUProcesses(
 		if !ok {
 			gpuIndex = gpuUUID
 		}
+		uuid := gpuUUID
 
 		username, program := lookupPIDUserProgram(pid)
 		if program == "" {
@@ -233,6 +254,7 @@ func updateGPUProcesses(
 		processCountByGPU[gpuIndex]++
 		processSamples = append(processSamples, processSample{
 			gpuIndex: gpuIndex,
+			uuid:     uuid,
 			pid:      pid,
 			user:     username,
 			program:  program,
@@ -241,17 +263,16 @@ func updateGPUProcesses(
 	}
 
 	for _, sample := range processSamples {
-		gpuProcessInfo.WithLabelValues(sample.gpuIndex, sample.pid, sample.user, sample.program).Set(1)
-		gpuProcessMemoryUsedMB.WithLabelValues(sample.gpuIndex, sample.pid, sample.user, sample.program).Set(sample.memUsed)
+		gpuProcessInfo.WithLabelValues(hostname, sample.gpuIndex, sample.uuid, sample.pid, sample.user, sample.program).Set(1)
+		gpuProcessMemoryUsedMB.WithLabelValues(hostname, sample.gpuIndex, sample.uuid, sample.pid, sample.user, sample.program).Set(sample.memUsed)
 
 		processCount := processCountByGPU[sample.gpuIndex]
 		if processCount <= 0 {
 			continue
 		}
-		// nvidia-smi doesn't expose per-process GPU utilization directly, so split
-		// per-GPU utilization evenly across active compute processes as an estimate.
+		// nvidia-smi 不直接暴露每进程 GPU 利用率，按活跃进程数均分作为估算值
 		perProcessUtil := gpuUtilByIndex[sample.gpuIndex] / float64(processCount)
-		gpuProcessUtilization.WithLabelValues(sample.gpuIndex, sample.pid, sample.user, sample.program).Set(perProcessUtil)
+		gpuProcessUtilization.WithLabelValues(hostname, sample.gpuIndex, sample.uuid, sample.pid, sample.user, sample.program).Set(perProcessUtil)
 	}
 
 	return nil

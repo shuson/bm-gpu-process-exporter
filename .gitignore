@@ -39,3 +39,5 @@ vendor/
 *.swp
 *.swo
 *~
+
+prometheus_job.yaml
