@@ -1,0 +1,22 @@
+[Unit]
+Description=BM GPU Process Exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=bm-gpu-exporter
+Group=bm-gpu-exporter
+EnvironmentFile=-/etc/default/bm-gpu-process-exporter
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/local/bin/bm-gpu-process-exporter
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

@@ -6,12 +6,10 @@ Prometheus exporter in Go that collects GPU utilization and GPU process metadata
 
 - Exposes `/metrics` for Prometheus scraping
 - Exposes `/healthz` for liveness checks
-- Collects per-GPU metrics:
-  - `gpu_utilization_percent{gpu="<index>"}`
-  - `gpu_memory_utilization_percent{gpu="<index>"}`
 - Collects per-process metrics for GPU users:
   - `gpu_process_info{gpu,pid,user,program} 1`
   - `gpu_process_memory_used_megabytes{gpu,pid,user,program}`
+  - `gpu_process_utilization_percent{gpu,pid,user,program}` (estimated as per-GPU utilization split evenly across active processes on that GPU)
 - Exporter self-observability:
   - `exporter_updates_total`
   - `exporter_update_errors_total`
