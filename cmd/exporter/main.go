@@ -322,26 +322,190 @@ func buildProgramLabel(args string) string {
 
 	exe := filepath.Base(fields[0])
 	lowerExe := strings.ToLower(exe)
-	if strings.HasPrefix(lowerExe, "python") {
-		if len(fields) >= 3 && fields[1] == "-m" {
-			return exe + " -m " + fields[2]
-		}
+	if isPythonExecutable(lowerExe) {
+		return buildPythonProgramLabel(exe, fields[1:])
+	}
 
-		for i := 1; i < len(fields); i++ {
-			arg := fields[i]
-			if strings.HasSuffix(arg, ".py") || strings.HasSuffix(arg, ".pyc") {
-				return exe + " " + filepath.Base(arg)
-			}
+	switch lowerExe {
+	case "torchrun", "deepspeed", "horovodrun":
+		return buildLauncherProgramLabel(exe, fields[1:], map[string]bool{
+			"--nnodes":         true,
+			"--nproc-per-node": true,
+			"--node-rank":      true,
+			"--master-addr":    true,
+			"--master-port":    true,
+			"--rdzv-backend":   true,
+			"--rdzv-endpoint":  true,
+			"--rdzv-id":        true,
+			"--max-restarts":   true,
+			"-n":               true,
+			"-np":              true,
+			"-H":               true,
+			"-x":               true,
+		})
+	case "accelerate":
+		launcher := exe
+		rest := fields[1:]
+		if len(rest) > 0 && rest[0] == "launch" {
+			launcher = launcher + " launch"
+			rest = rest[1:]
 		}
+		return buildLauncherProgramLabel(launcher, rest, map[string]bool{
+			"--config-file":       true,
+			"--num-processes":     true,
+			"--num-machines":      true,
+			"--machine-rank":      true,
+			"--main-process-ip":   true,
+			"--main-process-port": true,
+			"--mixed-precision":   true,
+			"--dynamo-backend":    true,
+			"-m":                  true,
+		})
+	case "mpirun", "mpiexec", "srun":
+		return buildLauncherProgramLabel(exe, fields[1:], map[string]bool{
+			"-n":                true,
+			"-np":               true,
+			"-N":                true,
+			"-H":                true,
+			"-x":                true,
+			"-w":                true,
+			"-mca":              true,
+			"--host":            true,
+			"--hosts":           true,
+			"--ntasks":          true,
+			"--nodes":           true,
+			"--nproc-per-node":  true,
+			"--gpus-per-task":   true,
+			"--cpus-per-task":   true,
+			"--ntasks-per-node": true,
+		})
+	case "sglang", "sglang-router", "sglang_router", "sglang-launch-server":
+		return buildCommandWithSubcommandLabel(exe, fields[1:], map[string]bool{
+			"--model-path":        true,
+			"--model":             true,
+			"--host":              true,
+			"--port":              true,
+			"--tp-size":           true,
+			"--dp-size":           true,
+			"--pp-size":           true,
+			"--quantization":      true,
+			"--max-num-seqs":      true,
+			"--max-model-len":     true,
+			"--served-model-name": true,
+		})
+	case "llamafactory", "llamafactory-cli":
+		return buildCommandWithSubcommandLabel(exe, fields[1:], map[string]bool{
+			"--config":             true,
+			"--dataset":            true,
+			"--model_name":         true,
+			"--model_name_or_path": true,
+			"--template":           true,
+			"--stage":              true,
+			"--finetuning_type":    true,
+		})
+	case "tritonserver", "trtllm-serve", "trtllm-build", "trtllm-bench":
+		return buildCommandWithSubcommandLabel(exe, fields[1:], map[string]bool{
+			"--model-repository": true,
+			"--grpc-port":        true,
+			"--http-port":        true,
+			"--model":            true,
+			"--engine_dir":       true,
+			"--tokenizer_dir":    true,
+		})
+	}
 
-		for i := 1; i < len(fields); i++ {
-			arg := fields[i]
-			if strings.HasPrefix(arg, "-") {
-				continue
-			}
+	return exe
+}
+
+func isPythonExecutable(lowerExe string) bool {
+	return strings.HasPrefix(lowerExe, "python")
+}
+
+func buildPythonProgramLabel(exe string, args []string) string {
+	if len(args) >= 2 && args[0] == "-m" {
+		return exe + " -m " + args[1]
+	}
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasSuffix(arg, ".py") || strings.HasSuffix(arg, ".pyc") {
 			return exe + " " + filepath.Base(arg)
 		}
 	}
 
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return exe + " " + filepath.Base(arg)
+	}
+
 	return exe
+}
+
+func buildLauncherProgramLabel(launcher string, args []string, optionsWithValue map[string]bool) string {
+	if len(args) == 0 {
+		return launcher
+	}
+
+	idx := firstLaunchedCommandIndex(args, optionsWithValue)
+	if idx >= len(args) {
+		return launcher
+	}
+
+	command := args[idx]
+	commandBase := filepath.Base(command)
+	commandLower := strings.ToLower(commandBase)
+	commandArgs := args[idx+1:]
+
+	if isPythonExecutable(commandLower) {
+		return launcher + " " + buildPythonProgramLabel(commandBase, commandArgs)
+	}
+
+	if strings.HasSuffix(commandLower, ".py") || strings.HasSuffix(commandLower, ".pyc") {
+		return launcher + " " + filepath.Base(command)
+	}
+
+	return launcher + " " + commandBase
+}
+
+func buildCommandWithSubcommandLabel(command string, args []string, optionsWithValue map[string]bool) string {
+	if len(args) == 0 {
+		return command
+	}
+
+	idx := firstLaunchedCommandIndex(args, optionsWithValue)
+	if idx >= len(args) {
+		return command
+	}
+
+	subcommand := filepath.Base(args[idx])
+	return command + " " + subcommand
+}
+
+func firstLaunchedCommandIndex(args []string, optionsWithValue map[string]bool) int {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			if i+1 < len(args) {
+				return i + 1
+			}
+			return len(args)
+		}
+
+		if strings.HasPrefix(arg, "-") {
+			if strings.Contains(arg, "=") {
+				continue
+			}
+			if optionsWithValue[arg] && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+
+		return i
+	}
+
+	return len(args)
 }
