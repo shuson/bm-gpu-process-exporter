@@ -41,3 +41,7 @@ vendor/
 *~
 
 prometheus_job.yaml
+
+# Local assistant/project tooling
+.codebuddy/
+openspec/
