@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -287,7 +288,7 @@ func getUUIDToIndexMap() (map[string]string, error) {
 }
 
 func lookupPIDUserProgram(pid string) (string, string) {
-	cmd := exec.Command("ps", "-p", pid, "-o", "user=", "-o", "comm=")
+	cmd := exec.Command("ps", "-p", pid, "-o", "user=", "-o", "args=")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", ""
@@ -299,11 +300,48 @@ func lookupPIDUserProgram(pid string) (string, string) {
 	}
 
 	fields := strings.Fields(line)
-	if len(fields) < 2 {
+	if len(fields) < 1 {
 		return "", ""
 	}
 
 	user := fields[0]
-	program := strings.Join(fields[1:], " ")
+	args := strings.TrimSpace(strings.TrimPrefix(line, user))
+	if args == "" {
+		return user, ""
+	}
+
+	program := buildProgramLabel(args)
 	return user, program
+}
+
+func buildProgramLabel(args string) string {
+	fields := strings.Fields(args)
+	if len(fields) == 0 {
+		return ""
+	}
+
+	exe := filepath.Base(fields[0])
+	lowerExe := strings.ToLower(exe)
+	if strings.HasPrefix(lowerExe, "python") {
+		if len(fields) >= 3 && fields[1] == "-m" {
+			return exe + " -m " + fields[2]
+		}
+
+		for i := 1; i < len(fields); i++ {
+			arg := fields[i]
+			if strings.HasSuffix(arg, ".py") || strings.HasSuffix(arg, ".pyc") {
+				return exe + " " + filepath.Base(arg)
+			}
+		}
+
+		for i := 1; i < len(fields); i++ {
+			arg := fields[i]
+			if strings.HasPrefix(arg, "-") {
+				continue
+			}
+			return exe + " " + filepath.Base(arg)
+		}
+	}
+
+	return exe
 }
